@@ -25,11 +25,14 @@ pub struct Row {
     pub drone2_total_elapsed_time: i64,
     pub await_within_three_minutes_of_unit_test_start: bool,
     pub delta_await_complete_to_unit_test_start: i64,
+    pub await_faster_than_unit_test: bool,
+    pub delta_await_complete_to_unit_test_complete: i64,
 }
 
 pub fn write_csv(
     commit_build_map: HashMap<String, (Vec<DroneBuildInfo>, Vec<DroneBuildInfo>)>,
     output: Option<PathBuf>,
+    develop: bool,
 ) {
     if let Some(file_name) = output {
         write_csv_aux(
@@ -38,6 +41,7 @@ pub fn write_csv(
                 .delimiter(b'\t')
                 .from_path(file_name)
                 .unwrap(),
+            develop,
         );
     } else {
         write_csv_aux(
@@ -45,6 +49,7 @@ pub fn write_csv(
             WriterBuilder::new()
                 .delimiter(b'\t')
                 .from_writer(io::stdout().lock()),
+            develop,
         );
     }
 }
@@ -52,12 +57,19 @@ pub fn write_csv(
 fn write_csv_aux<W: Write>(
     commit_build_map: HashMap<String, (Vec<DroneBuildInfo>, Vec<DroneBuildInfo>)>,
     mut csv_writer: csv::Writer<W>,
+    develop: bool,
 ) {
     for (git_sha, (mut drone1_builds, mut drone2_builds)) in commit_build_map {
         // if there aren't builds to compare, continue
         if drone1_builds.is_empty() || drone2_builds.is_empty() {
             continue;
         }
+
+        let stage_name = if develop {
+            "build-develop"
+        } else {
+            "build-pull-request"
+        };
 
         // order builds by build number
         drone1_builds.sort_by(|a, b| a.build_info.number.cmp(&b.build_info.number));
@@ -70,11 +82,11 @@ fn write_csv_aux<W: Write>(
         let pr_url = drone2_build.get_pr_url();
         let drone1_build_number = drone1_build.build_info.number;
         let drone2_build_number = drone2_build.build_info.number;
-        let drone1_stage = drone1_build.get_stage("build-pull-request");
+        let drone1_stage = drone1_build.get_stage(stage_name);
         let drone1_stage = match drone1_stage {
             Some(stage) => stage,
             None => {
-                println!("No stage 'build-pull-request' in build '{drone1_build_number}'");
+                println!("No stage '{stage_name}' in drone1 build '{drone1_build_number}'");
                 continue;
             }
         };
@@ -82,7 +94,7 @@ fn write_csv_aux<W: Write>(
             Some(step) => step,
             None => {
                 println!(
-                    "No step 'run-wallet-platform-unit-tests' in build '{drone1_build_number}'"
+                    "No step 'run-wallet-platform-unit-tests' in drone1 build '{drone1_build_number}'"
                 );
                 continue;
             }
@@ -90,16 +102,17 @@ fn write_csv_aux<W: Write>(
         if drone1_unit_test_step.get_status() == DroneStatus::Skipped {
             continue;
         }
-        let drone1_await_test_step =
-            match drone1_stage.get_step("await-wallet-platform-test-status") {
-                Some(step) => step,
-                None => {
-                    println!(
-                    "No step 'await-wallet-platform-test-status' in build '{drone1_build_number}'"
+        let drone1_await_test_step = match drone1_stage
+            .get_step("await-wallet-platform-test-status")
+        {
+            Some(step) => step,
+            None => {
+                println!(
+                    "No step 'await-wallet-platform-test-status' in drone1 build '{drone1_build_number}'"
                 );
-                    continue;
-                }
-            };
+                continue;
+            }
+        };
 
         let drone1_unit_test_status = drone1_unit_test_step.get_status();
         let drone1_await_test_status = drone1_await_test_step.get_status();
@@ -112,7 +125,12 @@ fn write_csv_aux<W: Write>(
             .get_stopped_timestamp()
             - drone1_unit_test_step.get_started_timestamp();
         let await_within_three_minutes_of_unit_test_start =
-            delta_await_complete_to_unit_test_start < 60 * 3;
+            delta_await_complete_to_unit_test_start < 60 * 5;
+        let delta_await_complete_to_unit_test_complete = drone1_await_test_step
+            .get_stopped_timestamp()
+            - drone1_unit_test_step.get_stopped_timestamp();
+        let await_faster_than_unit_test = drone1_await_test_step
+        .get_stopped_timestamp() < drone1_unit_test_step.get_stopped_timestamp();
 
         let record = Row {
             pr_number,
@@ -127,6 +145,8 @@ fn write_csv_aux<W: Write>(
             drone2_total_elapsed_time,
             await_within_three_minutes_of_unit_test_start,
             delta_await_complete_to_unit_test_start,
+            await_faster_than_unit_test,
+            delta_await_complete_to_unit_test_complete,
         };
         csv_writer.serialize(record).unwrap();
     }

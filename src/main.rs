@@ -81,7 +81,9 @@ fn filter_build(
             return FilterState::Continue;
         }
     }
-    if drone_build_list_item.status == DroneStatus::Running {
+    if drone_build_list_item.status == DroneStatus::Running
+        || drone_build_list_item.status == DroneStatus::Killed
+    {
         return FilterState::Continue;
     }
 
@@ -124,7 +126,7 @@ fn drone_build_map(
             &window_start,
             &window_end,
             &drone2_client,
-            develop
+            develop,
         ) {
             FilterState::Break => break,
             FilterState::Continue => continue,
@@ -173,5 +175,5 @@ fn main() {
         cli.develop,
     );
 
-    crate::csv::write_csv(commit_sha_to_builds, cli.file);
+    crate::csv::write_csv(commit_sha_to_builds, cli.file, cli.develop);
 }
